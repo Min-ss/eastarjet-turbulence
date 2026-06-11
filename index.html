@@ -3025,17 +3025,18 @@ async function loadAndRenderTurb() {
     }
   } catch(_) { /* CORS 차단 시 무시 */ }
 
-  // ── 2순위: NOAA AWC · FAA (SIGMET + G-AIRMET + PIREP) ──────
+  // ── 2순위: NOAA AWC · FAA (SIGMET + G-AIRMET) ─────────────
+  //   PIREP(조종사 실황·보조)는 종종 느리므로 본 데이터를 막지 않도록 백그라운드로 분리.
+  let needPirepMerge = false;
   if (!allRecords || allRecords.length === 0) {
     try {
       statusEl.textContent = 'NOAA AWC / FAA 데이터 로드 중...';
-      const [sigmets, gairmets, pireps] = await Promise.all([
-        fetchSigmets(), fetchGAirmets(), fetchPireps()
+      const [sigmets, gairmets] = await Promise.all([
+        fetchSigmets(), fetchGAirmets()
       ]);
-      const sigRecs  = [...sigmets, ...gairmets].map(r => parseTurbRecord(r)).filter(Boolean);
-      const pirepRecs = pireps.map(p => parsePirepRecord(p)).filter(Boolean);
-      allRecords = [...sigRecs, ...pirepRecs];
+      allRecords = [...sigmets, ...gairmets].map(r => parseTurbRecord(r)).filter(Boolean);
       usedSource = 'NOAA AWC / FAA';
+      needPirepMerge = true; // 본 데이터 렌더 후 PIREP을 비동기로 덧붙임
     } catch(e) {
       console.warn('NOAA AWC 실패:', e.message);
     }
@@ -3076,6 +3077,19 @@ async function loadAndRenderTurb() {
     renderTurbulence(STATE.turbRecords, STATE.sliderOffset);
   }
   drawCrossSection(); // 난기류 갱신 후 수직 단면 재드로
+
+  // ── PIREP 비동기 합류: 본 데이터 표시를 막지 않고, 도착하면 덧붙여 다시 렌더 ──
+  if (needPirepMerge) {
+    fetchPireps().then(pireps => {
+      const pirepRecs = (pireps || []).map(p => parsePirepRecord(p)).filter(Boolean);
+      if (pirepRecs.length === 0) return;
+      STATE.turbRecords = [...STATE.turbRecords, ...pirepRecs];
+      DATA_CACHE.turbulence.records = STATE.turbRecords; // 캐시도 갱신
+      if (SIM.enabled) { _lastSimSnappedMin = -1; _lastSimFlMin = -1; syncTurbWithSim(SIM.currentMin); }
+      else             { renderTurbulence(STATE.turbRecords, STATE.sliderOffset); }
+      drawCrossSection();
+    }).catch(() => { /* PIREP 실패는 무시 — 보조 데이터 */ });
+  }
 }
 
 function onTurbToggle(enabled) {
@@ -4777,33 +4791,36 @@ const IATA_ICAO = {
 //  METAR / TAF (출도착 공항 기상) — NOAA AWC (CORS 프록시 자동 폴백)
 // ══════════════════════════════════════════════════════════════
 // CORS 프록시를 통한 fetch 헬퍼 (AWC API에 Access-Control-Allow-Origin 없음)
-async function _fetchWithCorsProxy(url, timeoutMs = 12000) {
-  // 1순위: 직접 요청 (같은 출처 또는 CORS 허용 환경)
-  try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (r.ok) {
-      const ct = r.headers.get('content-type') || '';
-      if (ct.includes('json')) return await r.json();
-      const txt = await r.text();
-      try { return JSON.parse(txt); } catch(_) { return txt; }
+async function _fetchWithCorsProxy(url, timeoutMs = 7000) {
+  // 직접요청 + 다중 CORS 프록시를 "동시 경주"(Promise.any) → 가장 빠른 성공 채택.
+  //   왜: 회사망 실측상 직접요청은 CORS로 즉시 실패, 단일 프록시(allorigins)는 매번
+  //   12초 타임아웃까지 매달린 뒤 실패해 SIGMET/PIREP가 0건이 됨. 살아있는 프록시
+  //   (corsproxy.io ≈1.4s)를 포함해 동시에 던지면 막힌 경로를 기다리지 않음.
+  const enc = encodeURIComponent(url);
+  const attempts = [
+    url,                                                  // 직접 (CORS 허용 환경)
+    `https://corsproxy.io/?url=${enc}`,                   // 실측 생존(우선)
+    `https://api.allorigins.win/raw?url=${enc}`,          // 폴백
+    `https://api.codetabs.com/v1/proxy/?quest=${enc}`,    // 폴백
+  ];
+  const tryOne = async (u) => {
+    const r = await fetch(u, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const txt = await r.text();
+    let data;
+    try { data = JSON.parse(txt); } catch(_) { data = txt; }
+    // allorigins/get 등 래핑 응답({contents:"..."}) 대응
+    if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.contents === 'string') {
+      try { data = JSON.parse(data.contents); } catch(_) { data = data.contents; }
     }
-  } catch(e) {
-    console.info('직접 요청 실패 (CORS 차단 가능):', e.message);
-  }
-  // 2순위: allorigins CORS 프록시
+    return data;
+  };
   try {
-    const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const r = await fetch(proxy, { signal: AbortSignal.timeout(timeoutMs) });
-    if (r.ok) {
-      const ct = r.headers.get('content-type') || '';
-      if (ct.includes('json')) return await r.json();
-      const txt = await r.text();
-      try { return JSON.parse(txt); } catch(_) { return txt; }
-    }
-  } catch(e) {
-    console.warn('CORS 프록시도 실패:', e.message);
+    return await Promise.any(attempts.map(tryOne)); // 첫 성공 즉시 반환
+  } catch(_) {
+    console.warn('모든 CORS 경로 실패:', url);
+    return null;
   }
-  return null;
 }
 
 async function fetchMetarTaf(icaoCodes) {
