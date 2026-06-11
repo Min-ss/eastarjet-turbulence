@@ -939,6 +939,29 @@ if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'functi
   };
 }
 
+// 폴리필: Promise.any (iOS 14.0–14.4 · Chrome<85 미지원).
+//   난기류/기상 데이터 로딩(_fetchWithCorsProxy)이 Promise.any 에 의존 → 미지원 시 전량 실패 방지.
+if (typeof Promise !== 'undefined' && typeof Promise.any !== 'function') {
+  Promise.any = function (iterable) {
+    const arr = Array.from(iterable);
+    return new Promise((resolve, reject) => {
+      let pending = arr.length;
+      if (pending === 0) { reject(new Error('Promise.any: 빈 입력')); return; }
+      arr.forEach(p => Promise.resolve(p).then(resolve, () => {
+        if (--pending === 0) reject(new Error('Promise.any: 모두 실패'));
+      }));
+    });
+  };
+}
+
+// 외부(프록시 경유) 텍스트를 DOM(innerHTML/bindPopup/bindTooltip)에 넣기 전 HTML 이스케이프.
+//   SIGMET/PIREP/METAR/TAF raw 텍스트·콜사인 등은 공개 CORS 프록시를 거치므로
+//   악성·변조 응답의 <script>/onerror 주입을 차단(XSS 방어).
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+}
+
 // ══════════════════════════════════════════════════════════════
 //  GitHub-style 사이드바 섹션 토글
 // ══════════════════════════════════════════════════════════════
@@ -2234,14 +2257,14 @@ function updateMarkers(states) {
 
     const popup = `
       ${eastar ? '<div class="eastar-badge">✈ EASTAR JET 이스타항공</div>' : ''}
-      <div class="popup-title">${callsign}</div>
-      <div class="popup-row"><span class="key">ICAO24</span><span class="val">${icao24.toUpperCase()}</span></div>
-      <div class="popup-row"><span class="key">국적</span><span class="val">${country||'–'}</span></div>
+      <div class="popup-title">${escHtml(callsign)}</div>
+      <div class="popup-row"><span class="key">ICAO24</span><span class="val">${escHtml(String(icao24).toUpperCase())}</span></div>
+      <div class="popup-row"><span class="key">국적</span><span class="val">${escHtml(country||'–')}</span></div>
       <div class="popup-row"><span class="key">고도</span><span class="val">${fmtAlt(altBaro)}</span></div>
       <div class="popup-row"><span class="key">속도</span><span class="val">${mpsToKnots(velocity)} kts</span></div>
       <div class="popup-row"><span class="key">방위</span><span class="val">${heading!=null?heading.toFixed(0)+'°':'–'}</span></div>
       <div class="popup-row"><span class="key">수직속도</span><span class="val">${vertRate?(vertRate>0?'▲':'▼')+' '+Math.abs(vertRate).toFixed(1)+' m/s':'–'}</span></div>
-      <div class="popup-row"><span class="key">스쿼크</span><span class="val">${squawk||'–'}</span></div>
+      <div class="popup-row"><span class="key">스쿼크</span><span class="val">${escHtml(squawk||'–')}</span></div>
       <div class="popup-row"><span class="key">위치</span><span class="val">${lat.toFixed(4)}°N, ${lon.toFixed(4)}°E</span></div>
     `;
 
@@ -2527,7 +2550,9 @@ function parseTurbRecord(raw) {
     // 숫자 FL (예: "100" → 100, "30000" ft → 300)
     function toFlNum(v){ const n=parseInt(String(v).replace(/\D/g,'')); if(isNaN(n)||n===0)return null; return n>1000?Math.round(n/100):n; }
     const flMin = toFlNum(fl1);
-    const flMax = toFlNum(fl2) || flMin;
+    // 상한(top) 미지정이고 하한만 있으면 "FLxxx 이상"으로 보고 개방(999) — flMin으로 붕괴시켜
+    //   순항고도(상한보다 위)를 밴드 밖으로 잘못 판정해 난기류 알림을 놓치던 버그 방지.
+    const flMax = toFlNum(fl2) ?? (flMin != null ? 999 : null);
 
     // FIR 식별 (출처: NOAA AWC SIGMET → ICAO FIR)
     const rawText = raw.rawSigmet||raw.rawAirmet||'';
@@ -2635,7 +2660,7 @@ function renderTurbulence(records, offsetHours) {
       ? `<div style="margin-top:5px;padding-top:4px;border-top:1px solid #333;
            font-size:0.6rem;color:#888;font-family:monospace;
            max-width:280px;word-break:break-all;line-height:1.4;
-           max-height:56px;overflow-y:auto">${rec.rawText.slice(0,200)}${rec.rawText.length>200?'…':''}</div>`
+           max-height:56px;overflow-y:auto">${escHtml(rec.rawText.slice(0,200))}${rec.rawText.length>200?'…':''}</div>`
       : '';
 
     // ── 좌석벨트 예상 시간 계산 (SIGMET × 항로 × 고도 프로파일 3D 교차) ──────────
@@ -2984,6 +3009,7 @@ function scheduleGktgRouteSample() {
 }
 
 let turbRefreshTimer;
+let _turbLoadEpoch = 0; // 난기류 로드 세대(世代) — 비동기 PIREP 합류의 stale/중복 방지용
 
 // PIREP를 turbRecord 형식으로 변환 (점 마커로 표시)
 function parsePirepRecord(p) {
@@ -2991,15 +3017,16 @@ function parsePirepRecord(p) {
     const lat = parseFloat(p.latitude || p.lat);
     const lng = parseFloat(p.longitude || p.lon);
     if (isNaN(lat) || isNaN(lng)) return null;
-    // 반경 0.4도 원을 다각형으로 근사
-    const R = 0.15, pts = 8; // ~10NM (PIREP 점 보고 기준)
+    // 반경 약 0.15도(~9NM) 원을 8각형으로 근사 (PIREP 점 보고 기준)
+    const R = 0.15, pts = 8;
     const coords = Array.from({length: pts}, (_, i) => {
       const a = (i / pts) * 2 * Math.PI;
       return [lat + R * Math.sin(a), lng + R * Math.cos(a)];
     });
     const txt = (p.rawOb || p.rawPirep || '').toUpperCase();
     let severity = 'moderate';
-    if (txt.includes('SEV') || txt.includes('EXTRM')) severity = 'severe';
+    if (txt.includes('EXTRM')) severity = 'extreme';       // 극심
+    else if (txt.includes('SEV')) severity = 'severe';     // 심함
     const t = new Date(p.obsTime || p.receiptTime || Date.now());
     const validTo = new Date(t.getTime() + 2 * 3600000); // PIREP 2시간 유효
     return { coords, severity, validFrom: t, validTo,
@@ -3009,6 +3036,7 @@ function parsePirepRecord(p) {
 }
 
 async function loadAndRenderTurb() {
+  const myEpoch = ++_turbLoadEpoch; // 이번 로드 세대 — 비동기 PIREP 합류 시 최신성 확인용
   const statusEl = document.getElementById('turb-status');
   statusEl.textContent = '파이프라인 실행 중: AMO → NOAA AWC → 캐시';
 
@@ -3081,7 +3109,10 @@ async function loadAndRenderTurb() {
   // ── PIREP 비동기 합류: 본 데이터 표시를 막지 않고, 도착하면 덧붙여 다시 렌더 ──
   if (needPirepMerge) {
     fetchPireps().then(pireps => {
-      const pirepRecs = (pireps || []).map(p => parsePirepRecord(p)).filter(Boolean);
+      // 최신성 가드: 더 새 로드가 시작됐거나(=세대 불일치) 토글이 꺼졌으면 합류 취소.
+      //   (없으면 늦게 온 PIREP가 새 데이터셋에 stale/중복으로 덧붙어 폴리곤 누적됨)
+      if (myEpoch !== _turbLoadEpoch || !STATE.turbEnabled) return;
+      const pirepRecs = (Array.isArray(pireps) ? pireps : []).map(p => parsePirepRecord(p)).filter(Boolean);
       if (pirepRecs.length === 0) return;
       STATE.turbRecords = [...STATE.turbRecords, ...pirepRecs];
       DATA_CACHE.turbulence.records = STATE.turbRecords; // 캐시도 갱신
@@ -3095,9 +3126,11 @@ async function loadAndRenderTurb() {
 function onTurbToggle(enabled) {
   STATE.turbEnabled = enabled;
   if (enabled) {
+    clearInterval(turbRefreshTimer); // 중복 인터벌 누적 방지(켜기 재진입 대비)
     loadAndRenderTurb();
     turbRefreshTimer = setInterval(loadAndRenderTurb, 5*60*1000); // 5분마다 갱신
   } else {
+    _turbLoadEpoch++; // 대기 중인 비동기 PIREP 합류 무효화
     clearInterval(turbRefreshTimer);
     STATE.turbLayerGroup.clearLayers();
     STATE.beltAlerts = [];
@@ -3175,6 +3208,7 @@ const GKTG = {
   followLatest:     true,        // 최신 발표 시각 자동 추적 여부
   userTargetOffset: null,        // null=자동, 3=+3h, 6=+6h
   refreshTimer:     null,        // 자동 갱신 타이머 ID
+  loadToken:        0,           // 이미지 로드 세대 — 동시/순서뒤바뀜 로드의 stale overlay 방지
 };
 
 // AMO 이미지 범위 (G-KTG 글로벌)
@@ -3372,6 +3406,7 @@ function loadGktgImage(queue) {
     return;
   }
 
+  const myToken = ++GKTG.loadToken; // 이번 로드 세대 (이후 더 새 로드가 시작되면 이 로드는 폐기)
   const [tryIssued, tryOffset] = queue[0];
   const rest = queue.slice(1);
 
@@ -3392,6 +3427,8 @@ function loadGktgImage(queue) {
   });
 
   incoming.on('load', () => {
+    // 더 새 로드가 시작됐으면(세대 불일치) 이 이미지는 폐기 — stale overlay 적층/뒤바뀜 방지
+    if (myToken !== GKTG.loadToken) { map.removeLayer(incoming); return; }
     // ── 새 이미지 로드 완료 → crossfade 시작 ──────────────────
     const oldOverlay = GKTG.overlay;
     GKTG.overlay      = incoming;
@@ -3433,6 +3470,7 @@ function loadGktgImage(queue) {
 
   incoming.on('error', () => {
     map.removeLayer(incoming);
+    if (myToken !== GKTG.loadToken) return; // 더 새 로드가 시작됐으면 이 재시도 체인 중단
     loadGktgImage(rest); // 다음 후보로 자동 재시도
   });
 
@@ -3920,6 +3958,7 @@ function toggleSimPlay() {
 
 function startSimPlay() {
   if (!SIM.pathCoords) return;
+  if (SIM.playTimer) { clearInterval(SIM.playTimer); SIM.playTimer = null; } // 직접 호출 중복으로 인터벌 적층 방지
   if (!SIM.enabled) {
     document.getElementById('sim-toggle').checked = true;
     onSimToggle(true);
@@ -4813,6 +4852,11 @@ async function _fetchWithCorsProxy(url, timeoutMs = 7000) {
     if (data && typeof data === 'object' && !Array.isArray(data) && typeof data.contents === 'string') {
       try { data = JSON.parse(data.contents); } catch(_) { data = data.contents; }
     }
+    // 프록시가 HTTP 200 으로 HTML 오류페이지(Rate limit·Origin 거부 등)를 돌려주면
+    //   JSON.parse 실패로 data 가 문자열이 됨. 이 경우 "성공"으로 채택하면 빠른 쓰레기
+    //   응답이 진짜 JSON 을 이겨 0건으로 붕괴 → 문자열/빈 응답은 거부해 다른 경로를 기다림.
+    //   (이 함수의 모든 호출부는 JSON 배열/객체를 기대)
+    if (data == null || typeof data === 'string') throw new Error('비정상(프록시 오류페이지) 응답');
     return data;
   };
   try {
@@ -4905,9 +4949,9 @@ function metarSummary(m) {
   const wx    = m.wxString || m.presentWx || '';
 
   return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
-      <span style="background:${color};color:#000;font-weight:800;font-size:0.72rem;padding:1px 7px;border-radius:3px">${fc}</span>
+      <span style="background:${color};color:#000;font-weight:800;font-size:0.72rem;padding:1px 7px;border-radius:3px">${escHtml(fc)}</span>
       <span style="color:#888;font-size:0.63rem">${utc}</span>
-      ${wx ? `<span style="color:#FFD700;font-size:0.7rem">${wx}</span>` : ''}
+      ${wx ? `<span style="color:#FFD700;font-size:0.7rem">${escHtml(wx)}</span>` : ''}
     </div>
     <div style="font-size:0.7rem;line-height:1.85;color:#bbb">
       풍향·속도: <b>${wind}</b><br>
@@ -4915,7 +4959,7 @@ function metarSummary(m) {
       기온/이슬점: ${temp} &nbsp; QNH: ${qnh}
     </div>
     ${raw ? `<div style="margin-top:4px;padding:3px 5px;background:#0d1117;border-left:2px solid #E60020;
-        font-family:monospace;font-size:0.62rem;color:#888;word-break:break-all;line-height:1.5">${raw}</div>` : ''}`;
+        font-family:monospace;font-size:0.62rem;color:#888;word-break:break-all;line-height:1.5">${escHtml(raw)}</div>` : ''}`;
 }
 
 // 사이드바 METAR/TAF 패널 갱신 (패널 열림 여부와 무관하게 항상 로드)
@@ -4958,7 +5002,7 @@ async function updateMetarTafPanel() {
     const tafBlock = tafRaw
       ? `<div style="margin-top:5px;padding:3px 5px;background:#0d1117;border-left:2px solid #666;
            font-family:monospace;font-size:0.6rem;color:#777;word-break:break-all;line-height:1.5;
-           max-height:60px;overflow-y:auto">TAF: ${tafRaw.slice(0,220)}${tafRaw.length>220?'…':''}</div>`
+           max-height:60px;overflow-y:auto">TAF: ${escHtml(tafRaw.slice(0,220))}${tafRaw.length>220?'…':''}</div>`
       : `<div style="font-size:0.62rem;color:#444;margin-top:3px">TAF 없음</div>`;
 
     return `<div style="padding:7px 0;border-bottom:1px solid #1e2535">
@@ -5143,10 +5187,10 @@ async function updateNotamPanel() {
 
   const warnHtml = warnings.slice(0, 6).map(w => `
     <div style="padding:5px 0;border-bottom:1px solid #1e2535;font-size:0.68rem;line-height:1.6">
-      <span style="color:#FF8C00;font-weight:700">${w.type} — ${w.hazard}</span>
-      <span style="color:#888;font-size:0.62rem;margin-left:4px">${w.icao} 반경 ${w.dist}km</span><br>
-      <span style="color:#999;font-size:0.62rem">${w.validFrom} – ${w.validTo}</span><br>
-      <span style="color:#ccc;font-family:monospace;font-size:0.6rem;word-break:break-all">${w.raw}${w.raw.length>=200?'…':''}</span>
+      <span style="color:#FF8C00;font-weight:700">${escHtml(w.type)} — ${escHtml(w.hazard)}</span>
+      <span style="color:#888;font-size:0.62rem;margin-left:4px">${escHtml(w.icao)} 반경 ${w.dist}km</span><br>
+      <span style="color:#999;font-size:0.62rem">${escHtml(w.validFrom)} – ${escHtml(w.validTo)}</span><br>
+      <span style="color:#ccc;font-family:monospace;font-size:0.6rem;word-break:break-all">${escHtml(w.raw)}${w.raw.length>=200?'…':''}</span>
     </div>`).join('');
 
   el.innerHTML = `
