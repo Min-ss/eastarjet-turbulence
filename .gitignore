@@ -1,0 +1,18 @@
+# ── 발행 사이트는 index.html 한 파일입니다 ──
+# 원본 데이터·스크립트·모듈 등 나머지는 모두 업로드에서 제외하고
+# 사이트에 실제로 필요한 파일만 화이트리스트로 올립니다.
+
+# 1) 일단 전부 제외
+/*
+
+# 2) 사이트에 필요한 것만 다시 포함
+!.gitignore
+!index.html
+!README.md
+!업로드.bat
+
+# OS·편집기 부산물
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
