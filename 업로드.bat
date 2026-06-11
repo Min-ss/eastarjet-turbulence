@@ -6,6 +6,10 @@ echo   난기류 지도 - GitHub 자동 업로드
 echo ============================================
 echo.
 
+REM [안전장치] 추적 파일이 외부 요인(보안 에이전트 등)으로 사라졌으면 먼저 복구.
+REM   → 사라진 파일을 '삭제'로 잘못 업로드하는 사고 방지. (수정한 파일은 건드리지 않음)
+for /f "delims=" %%f in ('git ls-files --deleted') do git checkout -- "%%f"
+
 git add -A
 
 git diff --cached --quiet
