@@ -4058,17 +4058,21 @@ function syncTurbWithSim(minutes) {
   const snap30    = Math.floor(minutes / 30) * 30;
   const target30  = depMs + snap30 * 60000;
   const offsetH30 = (target30 - Date.now()) / 3600000;
+  // SIGMET 필터는 '출발 시각'에 고정한다. 시뮬 경과로 시계가 미래로 가면 게시본
+  // validTo 가 만료돼 레이어가 통째로 사라지는데(보통 비행 1시간쯤), SIGMET은 실시간
+  // 위험 게시물이라 비행 내내 유지가 직관적. (G-KTG 예보 모델만 시뮬 시각 따라 변함)
+  const offsetHDep = (depMs - Date.now()) / 3600000;
 
   if (snap30 !== _lastSimSnappedMin) {
     _lastSimSnappedMin = snap30;
 
-    // SIGMET: 30분 기준 시각으로 재필터링
+    // SIGMET: 출발 시각 유효분으로 고정 표시 (시뮬 경과로 만료돼 사라지지 않음)
     if (STATE.turbEnabled && STATE.turbRecords.length > 0) {
-      renderTurbulence(STATE.turbRecords, offsetH30);
+      renderTurbulence(STATE.turbRecords, offsetHDep);
       const tst = document.getElementById('turb-status');
       if (tst) {
-        const st = new Date(target30);
-        tst.textContent += ` [시뮬 ${String(st.getHours()).padStart(2,'0')}:${String(st.getMinutes()).padStart(2,'0')}]`;
+        const dt = new Date(depMs);
+        tst.textContent += ` [출발 ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')} 유효 · 비행 내내 고정]`;
       }
     }
 
@@ -4112,16 +4116,16 @@ function syncTurbWithSim(minutes) {
     syncEl.innerHTML = '<span style="color:#bbb">난류 레이어를 켜면 시각이 연동됩니다</span>';
     return;
   }
-  const snapTime = new Date(target30);
-  const sHH = String(snapTime.getHours()).padStart(2,'0');
-  const sMM = String(snapTime.getMinutes()).padStart(2,'0');
   const gktgLine = GKTG.enabled && _lastSimGktgBestOffset >= 0
     ? `<br><span style="color:#888;font-size:0.64rem">G-KTG: 발표 +${_lastSimGktgBestOffset}h 예보 적용 중` +
       buildGktgChangeHint() + `</span>`
     : '';
+  const sigLine = STATE.turbEnabled
+    ? `<br><span style="color:#888;font-size:0.64rem">SIGMET: 출발 시각 유효분 고정 (비행 내내 유지)</span>`
+    : '';
   syncEl.innerHTML =
-    `<span style="color:#E60020;font-weight:600">🔗 ${sHH}:${sMM} 기준 난류 (경과 +${snap30}분)</span>` +
-    gktgLine;
+    `<span style="color:#E60020;font-weight:600">🔗 비행 경과 +${snap30}분</span>` +
+    sigLine + gktgLine;
 
   // ── 모바일: 지도 위 배지 갱신 ────────────────────────────────
   const badge = document.getElementById('sim-map-badge');
