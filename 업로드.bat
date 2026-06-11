@@ -16,8 +16,7 @@ if %errorlevel%==0 (
   exit /b 0
 )
 
-for /f "tokens=1-5 delims=/: " %%a in ("%date% %time%") do set STAMP=%%a-%%b-%%c %%d:%%e
-git commit -m "사이트 갱신 %STAMP%"
+git commit -m "사이트 갱신 %date% %time%"
 echo.
 echo 업로드 중...
 git push origin main
