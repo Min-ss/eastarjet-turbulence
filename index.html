@@ -2810,25 +2810,22 @@ function syncSimTopbar() {
   if (div) div.style.display = (bOn && cOn) ? 'inline' : 'none';
 }
 
-// ── ① 다음 난기류 진입 상시 배지 — 시뮬 현재 시각 기준 보통 이상 구간 안내 ──
+// ── ① TURB 통과 배지 — 보통 이상 구간 '통과 중'일 때만 심각도 색상 글씨로 표시 ──
 function updateNextTurbChip(simMin) {
   const el = document.getElementById('next-turb-chip');
   if (!el) return;
   const m = (typeof simMin === 'number') ? simMin : (SIM.currentMin || 0);
   if (!STATE.currentRoute || !SIM.totalMin) { el.style.display = 'none'; syncSimTopbar(); return; }
   const all = [...(STATE.gktgBeltAlerts || []), ...(STATE.beltAlerts || [])];
-  const spans = all.filter(s => (GKTG_SEV_RANK[s.severity] || 0) >= 2).sort((a, b) => a.start - b.start);
+  const spans = all.filter(s => (GKTG_SEV_RANK[s.severity] || 0) >= 2);
   const col = sv => sv === 'extreme' ? '#FF5544' : sv === 'severe' ? '#FF9D45' : '#FFD700';
-  const cur  = spans.find(s => m >= s.start && m <= s.end);
-  const next = spans.find(s => s.start > m);
+  const cur = spans.find(s => m >= s.start && m <= s.end);
   if (cur) {
-    el.innerHTML = `<span style="color:${col(cur.severity)}">●</span> ${TL_SEV[cur.severity]} 통과 중 · 잔여 ${cur.end - m}분`;
-  } else if (next) {
-    el.innerHTML = `<span style="color:${col(next.severity)}">●</span> ${TL_SEV[next.severity]} +${next.start - m}분 후 · ${next.durMin}분간`;
-  } else if (all.length) {
-    el.innerHTML = `<span style="color:#6fcf6f">●</span> 잔여 구간 보통 이상 난기류 없음`;
-  } else { el.style.display = 'none'; syncSimTopbar(); return; }
-  el.style.display = 'inline-block';
+    el.innerHTML = `<span style="color:${col(cur.severity)}">● ${TL_SEV[cur.severity]} 통과 중 · 잔여 ${cur.end - m}분</span>`;
+    el.style.display = 'inline-block';
+  } else {
+    el.style.display = 'none';
+  }
   syncSimTopbar();
 }
 
