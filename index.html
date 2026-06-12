@@ -535,6 +535,23 @@
 
     @media (max-width:768px) { #panel-xsection { max-width:92vw; min-width:280px; } }
 
+    /* ── ⑤ 모바일 터치 타깃 확대 (실측: 체크박스 14px·버튼 28~32px → 권장 44px 근접) ── */
+    @media (max-width:768px) {
+      #sidebar input[type="checkbox"] { width:20px; height:20px; }
+      #sidebar button, #sidebar select,
+      #sidebar input[type="date"], #sidebar input[type="datetime-local"] { min-height:42px; }
+      #sidebar input[type="text"] { min-height:38px; }
+      #sidebar input[type="range"] { height:34px; }
+      #sidebar input[type="range"]::-webkit-slider-thumb { width:24px; height:24px; }
+    }
+    /* ── ① 다음 난기류 진입 상시 배지 (지도 위 고정) ── */
+    #next-turb-chip { position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:850;
+      background:rgba(26,32,53,0.93); color:#fff; padding:7px 14px; border-radius:20px;
+      font-size:0.78rem; font-weight:700; box-shadow:0 2px 10px rgba(0,0,0,0.35);
+      pointer-events:none; white-space:nowrap; display:none; }
+    @media (max-width:768px) { #next-turb-chip { top:8px; font-size:0.7rem; padding:6px 11px;
+      max-width:90vw; overflow:hidden; text-overflow:ellipsis; } }
+
     /* ── 면책 공지 바 (Apple subtle footer) ── */
     #disclaimer-bar {
       position:fixed; bottom:0; left:0; right:0; z-index:1199;
@@ -625,7 +642,7 @@
         <div style="font-size:0.7rem;font-weight:700;color:#E60020;margin-bottom:6px">✈ 편명으로 바로 설정</div>
         <div style="display:flex;align-items:center;background:#fff;border:1px solid #e0d0c0;border-radius:5px;padding:0 6px;margin-bottom:4px">
           <span style="font-size:0.72rem;font-weight:700;color:#E60020;white-space:nowrap">ZE</span>
-          <input type="text" id="flt-num-input" placeholder="편명 번호 입력 (예: 645)" maxlength="4"
+          <input type="text" id="flt-num-input" inputmode="numeric" placeholder="편명 번호 입력 (예: 645)" maxlength="4"
             style="border:none;outline:none;background:transparent;flex:1;width:0;font-size:0.82rem;color:#1a2035;padding:5px 4px;font-weight:700"
             oninput="this.value=this.value.replace(/\D/g,'')"
             onkeydown="if(event.key==='Enter')lookupFlight()">
@@ -1328,6 +1345,15 @@ function lookupFlight() {
   const schedNote = (depTime && arrTime) ? `<br><span style="font-size:0.85em;color:#555">STD ${depTime} → STA ${arrTime}${fltNote}</span>` : '';
   msgEl.style.color = '#1a8f1a';
   msgEl.innerHTML   = `<b>${fltKey}</b> ${entry.route} ${dirLabel}${depNote} 설정 완료${schedNote}`;
+
+  // ③④ 공유 URL 갱신(?flt=&date=) + 마지막 조회 저장 — file:// 등 미지원 환경은 무시
+  try {
+    const q = new URLSearchParams();
+    q.set('flt', num);
+    if (dateStr) q.set('date', dateStr);
+    history.replaceState(null, '', location.pathname + '?' + q.toString());
+  } catch (_) {}
+  try { localStorage.setItem('ej_last_lookup', JSON.stringify({ flt: num })); } catch (_) {}
 }
 
 // ── WMO 날씨 코드 한글 매핑 ───────────────────────────────────
@@ -2388,6 +2414,8 @@ const TURB_STYLES = {
   extreme:  { color:'#FF2200', fillColor:'#FF2200', fillOpacity:0.55, weight:2.5 },
 };
 const SEV_KO = { light:'약한 난기류', moderate:'보통 난기류', severe:'심한 난기류', extreme:'극심 난기류' };
+// 타임라인·지도 배지 영문 표기 (지도 SIGMET 툴팁의 SEV_KO 한글 표기와 별개)
+const TL_SEV = { light:'Light TURB', moderate:'Moderate TURB', severe:'Severe TURB', extreme:'Extreme TURB' };
 
 // ══════════════════════════════════════════════════════════════
 //  데이터 파이프라인 — 캐시 & 다중 소스 폴백
@@ -2764,7 +2792,29 @@ function renderTurbulence(records, offsetHours) {
 // ── 난기류 진입 타임라인 (사이드바) ─────────────────────────────
 //   STATE.beltAlerts (실고도 ∩ SIGMET FL밴드 분단위 교차 구간) 를 비행시간순으로 표시.
 //   순항고도와 무관한 난기류는 애초에 beltAlerts 에 없음 → 자동 제외. 대응텍스트 미포함.
+// ── ① 다음 난기류 진입 상시 배지 — 시뮬 현재 시각 기준 보통 이상 구간 안내 ──
+function updateNextTurbChip(simMin) {
+  const el = document.getElementById('next-turb-chip');
+  if (!el) return;
+  const m = (typeof simMin === 'number') ? simMin : (SIM.currentMin || 0);
+  if (!STATE.currentRoute || !SIM.totalMin) { el.style.display = 'none'; return; }
+  const all = [...(STATE.gktgBeltAlerts || []), ...(STATE.beltAlerts || [])];
+  const spans = all.filter(s => (GKTG_SEV_RANK[s.severity] || 0) >= 2).sort((a, b) => a.start - b.start);
+  const col = sv => sv === 'extreme' ? '#FF5544' : sv === 'severe' ? '#FF9D45' : '#FFD700';
+  const cur  = spans.find(s => m >= s.start && m <= s.end);
+  const next = spans.find(s => s.start > m);
+  if (cur) {
+    el.innerHTML = `<span style="color:${col(cur.severity)}">●</span> ${TL_SEV[cur.severity]} 통과 중 · 잔여 ${cur.end - m}분`;
+  } else if (next) {
+    el.innerHTML = `<span style="color:${col(next.severity)}">●</span> ${TL_SEV[next.severity]} +${next.start - m}분 후 · ${next.durMin}분간`;
+  } else if (all.length) {
+    el.innerHTML = `<span style="color:#6fcf6f">●</span> 잔여 구간 보통 이상 난기류 없음`;
+  } else { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+}
+
 function renderTurbTimeline() {
+  updateNextTurbChip();
   const listEl = document.getElementById('turbtl-list');
   const statEl = document.getElementById('turbtl-status');
   if (!listEl || !statEl) return;
@@ -2780,8 +2830,6 @@ function renderTurbTimeline() {
   // 이륙 후 경과(분) → +HHhMMm (한눈에 시·분 파악)
   const hm = m => `+${String(Math.floor(m / 60)).padStart(2, '0')}h${String(m % 60).padStart(2, '0')}m`;
 
-  // 타임라인 전용 영문 표기 (지도 툴팁의 SEV_KO 와 별개)
-  const TL_SEV = { light:'Light TURB', moderate:'Moderate TURB', severe:'Severe TURB', extreme:'Extreme TURB' };
   const itemHtml = (s, srcTag) => {
     const mid   = Math.round((s.start + s.end) / 2);
     const fl    = computeSimFlIdx(mid) * 10;
@@ -2824,8 +2872,22 @@ function renderTurbTimeline() {
     const badge = `<span style="background:#eef3fb;color:#3a66c4;font-size:0.58rem;padding:1px 5px;border-radius:3px;margin-left:5px;font-weight:600">G-KTG 예보</span>`;
     if (gspans.length) {
       const typeKo = GKTG.currentType === 'CAT' ? '청천난류' : GKTG.currentType === 'MTW' ? '산악파' : '최대난류';
+      // ② 요약줄 + Light 구간 기본 접힘 — 보통/심함 카드가 약 카드에 묻히지 않게
+      const sevSp = gspans.filter(s => s.severity === 'severe' || s.severity === 'extreme');
+      const modSp = gspans.filter(s => s.severity === 'moderate');
+      const lgtSp = gspans.filter(s => s.severity === 'light');
+      const sum = arr => arr.reduce((t, s) => t + s.durMin, 0);
+      const sp = [];
+      if (sevSp.length) sp.push(`<b style="color:#E65100">Severe ${sevSp.length}구간·${sum(sevSp)}분</b>`);
+      if (modSp.length) sp.push(`<b style="color:#B8860B">Moderate ${modSp.length}구간·${sum(modSp)}분</b>`);
+      if (lgtSp.length) sp.push(`<span style="color:#558B2F">Light ${lgtSp.length}구간·${sum(lgtSp)}분</span>`);
+      const summary = `<div style="margin:3px 0 4px;padding:5px 8px;background:#f6f8fa;border:1px solid #e8ecf0;border-radius:4px;font-size:0.66rem;line-height:1.6">${sp.join(' · ')}</div>`;
+      const mainCards = gspans.filter(s => s.severity !== 'light').map(s => itemHtml(s, badge)).join('');
+      const lightBlock = lgtSp.length
+        ? `<details style="margin:4px 0"><summary style="cursor:pointer;font-size:0.66rem;color:#558B2F;font-weight:600;padding:4px 2px">🟢 Light TURB ${lgtSp.length}구간 펼쳐보기 (총 ${sum(lgtSp)}분)</summary>${lgtSp.map(s => itemHtml(s, badge)).join('')}</details>`
+        : '';
       gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(공식 3등급 Light·Moderate·Severe · SIGMET 아님)</span></div>`
-               + gspans.map(s => itemHtml(s, badge)).join('');
+               + summary + mainCards + lightBlock;
     }
   }
 
@@ -3878,6 +3940,7 @@ function updateSimTimeDisplay(minutes) {
   else el.textContent = h > 0
     ? `출발 후 ${h}시간 ${String(m).padStart(2,'0')}분`
     : `출발 후 ${m}분`;
+  updateNextTurbChip(minutes);
 }
 
 // ── 항공기 마커 위치 갱신 ─────────────────────────────────────
@@ -5412,6 +5475,37 @@ onGktgToggle(true);
 // SIGMET 난류 토글 기본 활성화 (승무원 즉시 확인용)
 document.getElementById('turb-toggle').checked = true;
 onTurbToggle(true);
+
+// ① 다음 난기류 진입 상시 배지 엘리먼트 (지도 위 고정)
+(function () {
+  const chip = document.createElement('div');
+  chip.id = 'next-turb-chip';
+  document.getElementById('map').appendChild(chip);
+})();
+
+// ③④ URL(?flt=645&date=YYYY-MM-DD) 또는 마지막 조회 자동 복원 — 열자마자 0탭 브리핑
+(function restoreLookup() {
+  let flt = null, date = '';
+  try {
+    const q = new URLSearchParams(location.search);
+    if (q.get('flt')) { flt = (q.get('flt') || '').replace(/\D/g, '').slice(0, 4); date = q.get('date') || ''; }
+  } catch (_) {}
+  if (!flt) {
+    try {
+      const saved = JSON.parse(localStorage.getItem('ej_last_lookup') || 'null');
+      if (saved && saved.flt) flt = String(saved.flt).replace(/\D/g, '').slice(0, 4);
+    } catch (_) {}
+  }
+  if (!flt || !FLTNO_MAP['ZE' + flt]) return;
+  document.getElementById('flt-num-input').value = flt;
+  const dEl = document.getElementById('flt-date-input');
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) dEl.value = date;
+  else if (!dEl.value) {
+    const now = new Date();
+    dEl.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  setTimeout(lookupFlight, 700);   // 지도·드롭다운 초기화 완료 후
+})();
 
 // 수직 단면 초기 빈 화면 드로
 setTimeout(drawCrossSection, 200);
