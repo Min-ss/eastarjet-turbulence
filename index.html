@@ -2375,7 +2375,7 @@ const TURB_STYLES = {
   severe:   { color:'#FF8C00', fillColor:'#FF8C00', fillOpacity:0.45, weight:2 },
   extreme:  { color:'#FF2200', fillColor:'#FF2200', fillOpacity:0.55, weight:2.5 },
 };
-const SEV_KO = { moderate:'보통 난기류', severe:'심한 난기류', extreme:'극심 난기류' };
+const SEV_KO = { light:'약한 난기류', moderate:'보통 난기류', severe:'심한 난기류', extreme:'극심 난기류' };
 
 // ══════════════════════════════════════════════════════════════
 //  데이터 파이프라인 — 캐시 & 다중 소스 폴백
@@ -2802,7 +2802,7 @@ function renderTurbTimeline() {
     }
   }
 
-  // ── G-KTG 모델 예보 구간 (보통 이상) ─────────────────────────
+  // ── G-KTG 모델 예보 구간 (약 이상 · 공식 3등급 전체) ─────────
   let gktgHtml = '', gktgCnt = 0;
   if (gktgOn) {
     const gspans = (STATE.gktgBeltAlerts || []).slice().sort((a, b) => a.start - b.start);
@@ -2818,7 +2818,7 @@ function renderTurbTimeline() {
   if (!sigHtml && !gktgHtml) {
     const parts = [];
     if (sigOn)  parts.push('SIGMET');
-    if (gktgOn) parts.push('G-KTG 예보(보통 이상)');
+    if (gktgOn) parts.push('G-KTG 예보(약·보통·심함)');
     statEl.textContent = `현재 항로·고도 프로파일과 교차하는 ${parts.join(' · ')} 난기류 없음`;
     listEl.innerHTML = '';
     return;
@@ -2834,7 +2834,7 @@ function renderTurbTimeline() {
 // ══════════════════════════════════════════════════════════════
 //  G-KTG 예보 래스터 → 항로 좌석벨트 구간 샘플링
 //   지도에 그려지는 G-KTG 예보 이미지를 항로를 따라 "매 분 실고도 FL"
-//   에 해당하는 예보 이미지에서 픽셀 색으로 읽어 보통(MOD) 이상 구간 추출.
+//   에 해당하는 예보 이미지에서 픽셀 색으로 읽어 약(LGT) 이상 구간 추출.
 //   색→강도: 실측 AMO 팔레트(b≈0, 녹224→황→주→적) 기준. SIGMET 과 별개의 모델 예보.
 // ══════════════════════════════════════════════════════════════
 const GKTG_SEV_RANK = { light: 1, moderate: 2, severe: 3, extreme: 4 };
@@ -2985,20 +2985,25 @@ async function sampleGktgRouteBelts() {
   const sevByMin = new Array(total + 1).fill(null);
   const apply = (idxs, bmp) => { for (const m of idxs) sevByMin[m] = _sampleBitmapPixel(bmp, mins[m].lat, mins[m].lng); };
 
-  // 보통(MOD) 이상 연속 구간 → span (gap ≤2분 허용, severity = 구간 내 최댓값)
-  const rankSev = { 2: 'moderate', 3: 'severe', 4: 'extreme' };
+  // 약(LGT) 이상 연속 구간 → span (gap ≤2분 허용)
+  //   약(1)과 보통 이상(≥2)은 별도 구간으로 분리 — 넓은 녹색대가 보통과 합쳐져
+  //   체감 등급이 부풀려지는 것을 방지. 보통 이상 내부에서는 기존대로 peak 병합.
+  const rankSev = { 1: 'light', 2: 'moderate', 3: 'severe', 4: 'extreme' };
   const buildSpans = () => {
     const spans = []; let cur = null;
     for (let m = 0; m <= total; m++) {
       const sv = sevByMin[m], rank = sv ? GKTG_SEV_RANK[sv] : 0;
-      if (rank >= 2) {
-        if (cur && m - cur.end <= 2) { cur.end = m; if (rank > cur.peak) cur.peak = rank; }
-        else { if (cur) spans.push(cur); cur = { start: m, end: m, peak: rank }; }
+      const tier = rank >= 2 ? 2 : rank;            // 0=없음 · 1=약 · 2=보통 이상
+      if (tier >= 1) {
+        if (cur && cur.tier === tier && m - cur.end <= 2) { cur.end = m; if (rank > cur.peak) cur.peak = rank; }
+        else { if (cur) spans.push(cur); cur = { start: m, end: m, peak: rank, tier }; }
       } else if (cur && m - cur.end > 2) { spans.push(cur); cur = null; }
     }
     if (cur) spans.push(cur);
-    spans.forEach(s => { s.severity = rankSev[s.peak]; s.durMin = s.end - s.start; });
-    return spans;
+    // durMin: start==end 도 ~1분 노출이므로 최소 1분 ("0분 통과" 방지)
+    spans.forEach(s => { s.severity = rankSev[s.peak]; s.durMin = Math.max(1, s.end - s.start); delete s.tier; });
+    // 1분 미만 약 조각(경계 안티앨리어싱 잔재)만 제거 — 보통 이상은 전부 유지
+    return spans.filter(s => GKTG_SEV_RANK[s.severity] >= 2 || s.end - s.start >= 1);
   };
 
   // 2-a) 최대 그룹(순항 주 예보시간) 먼저 — 순항 결과 즉시 표시(점진 렌더)
