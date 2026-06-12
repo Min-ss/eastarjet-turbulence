@@ -2876,24 +2876,15 @@ function renderTurbTimeline() {
     const badge = `<span style="background:#eef3fb;color:#3a66c4;font-size:0.58rem;padding:1px 5px;border-radius:3px;margin-left:5px;font-weight:600">G-KTG 예보</span>`;
     if (gspans.length) {
       const typeKo = GKTG.currentType === 'CAT' ? '청천난류' : GKTG.currentType === 'MTW' ? '산악파' : '최대난류';
-      // ② 요약줄 + Light 구간 기본 접힘 — 보통/심함 카드가 약 카드에 묻히지 않게
-      const sevSp = gspans.filter(s => s.severity === 'severe' || s.severity === 'extreme');
-      const modSp = gspans.filter(s => s.severity === 'moderate');
+      // Light 토글: 켜면 전체(약 포함)를 시간순 통합 표시, 끄면 보통/심함만
       const lgtSp = gspans.filter(s => s.severity === 'light');
-      const sum = arr => arr.reduce((t, s) => t + s.durMin, 0);
-      const sp = [];
-      if (sevSp.length) sp.push(`<b style="color:#E65100">Severe ${sevSp.length}구간·${sum(sevSp)}분</b>`);
-      if (modSp.length) sp.push(`<b style="color:#B8860B">Moderate ${modSp.length}구간·${sum(modSp)}분</b>`);
-      if (lgtSp.length) sp.push(`<span style="color:#558B2F">Light ${lgtSp.length}구간·${sum(lgtSp)}분</span>`);
-      const summary = `<div style="margin:3px 0 4px;padding:5px 8px;background:#f6f8fa;border:1px solid #e8ecf0;border-radius:4px;font-size:0.66rem;line-height:1.6">${sp.join(' · ')}</div>`;
-      // Light 토글: 켜면 전체(약 포함)를 시간순 통합 표시, 끄면 보통/심함만 — 별도 블록 분리 없음
       const cards = (_tlShowLight ? gspans : gspans.filter(s => s.severity !== 'light'))
         .map(s => itemHtml(s, badge)).join('');
       const lightToggle = lgtSp.length
-        ? `<button onclick="toggleTlLight()" style="width:100%;margin:2px 0 3px;padding:5px 8px;background:${_tlShowLight ? '#eaf5ea' : '#fff'};border:1px solid #cfe3cf;border-radius:4px;font-size:0.66rem;color:#3a7a3a;font-weight:600;cursor:pointer;text-align:left;font-family:inherit">${_tlShowLight ? `🟢 Light TURB 포함 시간순 표시 중 — 숨기기` : `🟢 Light TURB ${lgtSp.length}구간 시간순으로 함께 보기 (총 ${sum(lgtSp)}분)`}</button>`
+        ? `<button onclick="toggleTlLight()" style="width:100%;margin:2px 0 3px;padding:5px 8px;background:${_tlShowLight ? '#eaf5ea' : '#fff'};border:1px solid #cfe3cf;border-radius:4px;font-size:0.66rem;color:#3a7a3a;font-weight:600;cursor:pointer;text-align:left;font-family:inherit">${_tlShowLight ? `🟢 Light TURB 포함 타임라인 표시 중 — 숨기기` : `🟢 Light TURB 포함 타임라인`}</button>`
         : '';
       gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(공식 3등급 Light·Moderate·Severe · SIGMET 아님)</span></div>`
-               + summary + lightToggle + cards;
+               + lightToggle + cards;
     }
   }
 
