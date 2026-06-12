@@ -3533,27 +3533,36 @@ function stopGktgAutoRefresh() {
 //  ① 각 발표 시각 내에서 타겟 시각(현재 or 현재+offset)에 가장 가까운 유효시각 오프셋 먼저 시도
 //  ② 실패 시 같은 발표 시각의 나머지 오프셋 → 이전 발표 시각으로 이동
 //  → 전체 3발표×7오프셋 = 최대 21개 조합 모두 시도
+// 폴백 큐 — 목표시각에 가까운 예보시간(fh) 우선, 같은 fh 는 '모든 발표런'을 먼저 시도.
+//   타임라인 샘플러(_fetchGktgBitmapForFh: fh 고정·발표런만 변화)와 동일한 우선순위.
+//   → 최신런에 이상적 fh 이미지가 없어도 엉뚱한 fh(예: +18h)로 튀지 않고 '같은 fh 의 과거런'을
+//     먼저 선택. 지도 오버레이와 사이드바 타임라인이 항상 같은 예보 이미지를 보게 하는 핵심.
+//   (이전: 발표런 고정·fh 변화 → 단일 fh 결손 시 지도만 엉뚱한 fh 로 빠져 타임라인과 불일치)
+function _buildGktgFhMajorQueue(targetMs) {
+  const offsets    = [0, 3, 6, 9, 12, 15, 18];
+  const issuedList = GKTG.issuedTimes.slice(0, 5); // 타임라인 샘플러와 동일 범위
+  if (!issuedList.length) return [];
+  const issuedMsOf = issued => Date.UTC(
+    parseInt(issued.slice(0,4)), parseInt(issued.slice(4,6)) - 1,
+    parseInt(issued.slice(6,8)), parseInt(issued.slice(8,10))
+  );
+  // fh 우선순위는 최신 발표런(issued[0]) 기준 근접도 = computeBestGktgOffset 와 동일 기준
+  const refMs    = issuedMsOf(issuedList[0]);
+  const fhSorted = [...offsets].sort((a, b) =>
+    Math.abs(targetMs - (refMs + a * 3600000)) -
+    Math.abs(targetMs - (refMs + b * 3600000))
+  );
+  const queue = [];
+  for (const off of fhSorted) for (const issued of issuedList) queue.push([issued, off]);
+  return queue; // fh-major (같은 fh → 전 발표런 우선)
+}
+
 function buildGktgQueue() {
   const now        = Date.now();
   const targetTime = GKTG.userTargetOffset !== null
     ? now + GKTG.userTargetOffset * 3600000
     : now;
-  const offsets = [0, 3, 6, 9, 12, 15, 18];
-  const queue   = [];
-
-  for (const issued of GKTG.issuedTimes.slice(0, 3)) {
-    const issuedMs = Date.UTC(
-      parseInt(issued.slice(0,4)), parseInt(issued.slice(4,6)) - 1,
-      parseInt(issued.slice(6,8)), parseInt(issued.slice(8,10))
-    );
-    // 이 발표 시각 내에서 타겟 시각과 가장 가까운 순으로 정렬
-    const sorted = [...offsets].sort((a, b) =>
-      Math.abs(targetTime - (issuedMs + a * 3600000)) -
-      Math.abs(targetTime - (issuedMs + b * 3600000))
-    );
-    for (const off of sorted) queue.push([issued, off]);
-  }
-  return queue; // 최대 21개
+  return _buildGktgFhMajorQueue(targetTime);
 }
 
 // ── 예보 시각 오프셋 선택 ────────────────────────────────────
@@ -4075,54 +4084,38 @@ function computeBestGktgOffset(offsetH) {
 // ── 시뮬 목표 시각 기준 G-KTG 폴백 큐 생성 ──────────────────
 // buildGktgQueue()와 동일한 방식이지만 특정 offsetH를 목표로 함
 function buildGktgQueueForOffset(offsetH) {
-  const now      = Date.now();
-  const targetMs = now + offsetH * 3600000;
-  const offsets  = [0, 3, 6, 9, 12, 15, 18];
-  const queue    = [];
-  for (const issued of GKTG.issuedTimes.slice(0, 3)) {
-    const issuedMs = Date.UTC(
-      parseInt(issued.slice(0,4)), parseInt(issued.slice(4,6)) - 1,
-      parseInt(issued.slice(6,8)), parseInt(issued.slice(8,10))
-    );
-    const sorted = [...offsets].sort((a, b) =>
-      Math.abs(targetMs - (issuedMs + a * 3600000)) -
-      Math.abs(targetMs - (issuedMs + b * 3600000))
-    );
-    for (const off of sorted) queue.push([issued, off]);
-  }
-  return queue; // 최대 21개 후보 — 단일 실패 시 자동 폴백
+  return _buildGktgFhMajorQueue(Date.now() + offsetH * 3600000); // fh-major (타임라인과 동일 우선순위)
 }
 
 // ── 시뮬레이션 현재 시각 → 난류 레이어 동기화 ──────────────
-//   • 고도(FL) 전환  : 10분 단위
-//   • 시각 매칭(SIGMET/G-KTG 예보 오프셋) : 30분 단위
+//   • G-KTG (FL·예보시간 fh) : 매 틱 '정확 경과분' 기준 (지도 = 타임라인 일치)
+//   • SIGMET 시각 필터        : 30분 단위 + '출발 시각' 고정(비행 내내 유지)
 function syncTurbWithSim(minutes) {
   const depMs = SIM.departureTimeMs || Date.now();
 
-  // ── 10분 스냅 (고도 기반 FL 전환) ────────────────────────────
-  const snap10    = Math.floor(minutes / 10) * 10;
-  const target10  = depMs + snap10 * 60000;
-  const offsetH10 = (target10 - Date.now()) / 3600000;
-
-  if (snap10 !== _lastSimFlMin) {
-    _lastSimFlMin = snap10;
-
-    if (GKTG.enabled && SIM.totalMin > 0) {
-      const simFlIdx = computeSimFlIdx(snap10);
-      if (simFlIdx !== GKTG.currentFlIdx) {
-        // FL 변경 → 사이드바 버튼·고도 표시 갱신 후 G-KTG 재로드
-        GKTG.currentFlIdx = simFlIdx;
-        updateFlAltitudeDisplay(simFlIdx);
+  // ── G-KTG: '정확 경과분' 기준 FL·예보시간(fh) 동기화 ─────────────────────────
+  //   FL·예보시간을 10분/30분 스냅이 아닌 매 틱 정확분으로 산출하고, 둘 중 하나라도
+  //   바뀔 때만 재로드. 스냅 floor 지연(최대 30분)으로 fh 경계 부근에서 지도 오버레이와
+  //   사이드바 타임라인이 서로 다른 예보(fh)를 쓰던 불일치를 제거. 샘플러도 매 분 정확분
+  //   fh(computeBestGktgOffset)를 쓰므로 현재 시점의 지도 = 타임라인 일치.
+  //   (재로드 횟수는 fh/FL 변화 수와 동일 → 성능 영향 없음. _lastSimGktgBestOffset 가드)
+  if (GKTG.enabled && GKTG.issuedTimes.length && SIM.totalMin > 0) {
+    const offsetHexact = (depMs + minutes * 60000 - Date.now()) / 3600000;
+    const wantFl = computeSimFlIdx(minutes);
+    const wantFh = computeBestGktgOffset(offsetHexact);
+    if (wantFl !== GKTG.currentFlIdx || wantFh !== _lastSimGktgBestOffset) {
+      if (wantFl !== GKTG.currentFlIdx) {
+        // FL 변경 → 사이드바 버튼·고도 표시 갱신
+        GKTG.currentFlIdx = wantFl;
+        updateFlAltitudeDisplay(wantFl);
         document.querySelectorAll('#gktg-fl-btns .fl-btn').forEach(b => {
-          b.classList.toggle('active', parseInt(b.dataset.idx) === simFlIdx);
+          b.classList.toggle('active', parseInt(b.dataset.idx) === wantFl);
         });
-        // 현재 시각 기준 최적 예보로 재로드 (FL 변경이 트리거)
-        const best = computeBestGktgOffset(offsetH10);
-        _lastSimGktgBestOffset = best;
-        GKTG.userTargetOffset  = offsetH10;
-        document.querySelectorAll('#gktg-offset-btns .fl-btn').forEach(b => b.classList.remove('active'));
-        loadGktgImage(buildGktgQueueForOffset(offsetH10));
       }
+      _lastSimGktgBestOffset = wantFh;
+      GKTG.userTargetOffset  = offsetHexact;
+      document.querySelectorAll('#gktg-offset-btns .fl-btn').forEach(b => b.classList.remove('active'));
+      loadGktgImage(buildGktgQueueForOffset(offsetHexact));
     }
   }
 
@@ -4139,23 +4132,13 @@ function syncTurbWithSim(minutes) {
     _lastSimSnappedMin = snap30;
 
     // SIGMET: 출발 시각 유효분으로 고정 표시 (시뮬 경과로 만료돼 사라지지 않음)
+    //   (G-KTG 예보 fh·FL 동기화는 위 '정확 경과분' 블록이 매 틱 담당)
     if (STATE.turbEnabled && STATE.turbRecords.length > 0) {
       renderTurbulence(STATE.turbRecords, offsetHDep);
       const tst = document.getElementById('turb-status');
       if (tst) {
         const dt = new Date(depMs);
         tst.textContent += ` [출발 ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')} 유효 · 비행 내내 고정]`;
-      }
-    }
-
-    // G-KTG: 예보 오프셋이 바뀐 경우만 재로드 (FL은 10분 블록이 담당)
-    if (GKTG.enabled && GKTG.issuedTimes.length) {
-      const best = computeBestGktgOffset(offsetH30);
-      if (best !== _lastSimGktgBestOffset) {
-        _lastSimGktgBestOffset = best;
-        GKTG.userTargetOffset  = offsetH30;
-        document.querySelectorAll('#gktg-offset-btns .fl-btn').forEach(b => b.classList.remove('active'));
-        loadGktgImage(buildGktgQueueForOffset(offsetH30));
       }
     }
   }
