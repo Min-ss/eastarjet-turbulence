@@ -2850,23 +2850,42 @@ function _classifyGktgPixel(r, g, b, a) {
   return 'extreme';                                // 적색
 }
 
-// ImageBitmap 1점 샘플 — 전체 ImageData(≈23MB) 미할당, 1×1 스크래치만 사용.
+// ImageBitmap 항로 코리도(corridor) 샘플 — 전체 ImageData(≈23MB) 미할당, 소블록 스크래치만.
 //   합성모드 'copy' → 투명 픽셀도 그대로 복사(이전 잔상 방지).
-let _gktgScratchCtx = null;
+//   단일픽셀이 아니라 항로 ±_GKTG_CORRIDOR_DEG° 작은 코리도를 읽어 '최대 심각도'를 취함.
+//   이유: G-KTG(GDPS) 격자가 거칠고, 샘플용 축소본(weserv) PNG 경계에 안티앨리어싱
+//        반투명(α≈1~10) 픽셀이 섞여, 단일픽셀이 실제 난기류 셀의 빈틈/경계에 빠지면
+//        화면엔 색이 보여도 '없음'으로 오판 → 타임라인이 심한 난기류까지 누락하던 버그.
+//   코리도는 해상도 독립(°→px 동적). 0.3°(≈±33km)는 항로 폭/항법오차 수준이라
+//   항로에서 뚜렷이 벗어난(예: +0.7° 내륙) 셀은 여전히 제외 → 과탐 없이 누락만 보정.
+const _GKTG_CORRIDOR_DEG = 0.3;
+let _gktgScratchCtx = null, _gktgScratchW = 0, _gktgScratchH = 0;
 function _sampleBitmapPixel(bmp, lat, lng) {
   const latN = 80.08, latS = -80.08, lngW = -179.96, lngE = 180.04;
   if (lat > latN || lat < latS) return null;
-  const sx = Math.round((lng - lngW) / (lngE - lngW) * (bmp.width  - 1));
-  const sy = Math.round((latN - lat) / (latN - latS) * (bmp.height - 1));
-  if (sx < 0 || sx >= bmp.width || sy < 0 || sy >= bmp.height) return null;
-  if (!_gktgScratchCtx) {
-    const cv = document.createElement('canvas'); cv.width = 1; cv.height = 1;
+  const cx = Math.round((lng - lngW) / (lngE - lngW) * (bmp.width  - 1));
+  const cy = Math.round((latN - lat) / (latN - latS) * (bmp.height - 1));
+  if (cx < 0 || cx >= bmp.width || cy < 0 || cy >= bmp.height) return null;
+  // °당 픽셀로 코리도 반경(px) 계산 → 축소본·원본 어느 해상도든 같은 지리적 폭
+  const rx = Math.max(1, Math.round(_GKTG_CORRIDOR_DEG / ((lngE - lngW) / (bmp.width  - 1))));
+  const ry = Math.max(1, Math.round(_GKTG_CORRIDOR_DEG / ((latN - latS) / (bmp.height - 1))));
+  const x0 = Math.max(0, cx - rx), y0 = Math.max(0, cy - ry);
+  const x1 = Math.min(bmp.width  - 1, cx + rx), y1 = Math.min(bmp.height - 1, cy + ry);
+  const w = x1 - x0 + 1, h = y1 - y0 + 1;
+  if (!_gktgScratchCtx || w > _gktgScratchW || h > _gktgScratchH) {
+    const cv = document.createElement('canvas'); cv.width = Math.max(w, _gktgScratchW, 8); cv.height = Math.max(h, _gktgScratchH, 8);
     _gktgScratchCtx = cv.getContext('2d', { willReadFrequently: true });
     _gktgScratchCtx.globalCompositeOperation = 'copy';
+    _gktgScratchW = cv.width; _gktgScratchH = cv.height;
   }
-  _gktgScratchCtx.drawImage(bmp, sx, sy, 1, 1, 0, 0, 1, 1);
-  const d = _gktgScratchCtx.getImageData(0, 0, 1, 1).data;
-  return _classifyGktgPixel(d[0], d[1], d[2], d[3]);
+  _gktgScratchCtx.drawImage(bmp, x0, y0, w, h, 0, 0, w, h); // 1:1(비확대) → 보간 없음
+  const d = _gktgScratchCtx.getImageData(0, 0, w, h).data;
+  let bestRank = 0, bestSev = null;
+  for (let i = 0; i < w * h; i++) {
+    const sv = _classifyGktgPixel(d[i*4], d[i*4+1], d[i*4+2], d[i*4+3]);
+    if (sv) { const rk = GKTG_SEV_RANK[sv]; if (rk > bestRank) { bestRank = rk; bestSev = sv; } }
+  }
+  return bestSev;
 }
 
 // 비트맵 LRU 캐시 (url → ImageBitmap) — 재샘플(출발시각·토글) 즉시화
