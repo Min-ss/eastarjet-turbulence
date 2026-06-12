@@ -2768,6 +2768,8 @@ function renderTurbTimeline() {
   // 이륙 후 경과(분) → +HHhMMm (한눈에 시·분 파악)
   const hm = m => `+${String(Math.floor(m / 60)).padStart(2, '0')}h${String(m % 60).padStart(2, '0')}m`;
 
+  // 타임라인 전용 영문 표기 (지도 툴팁의 SEV_KO 와 별개)
+  const TL_SEV = { light:'Light TURB', moderate:'Moderate TURB', severe:'Severe TURB', extreme:'Extreme TURB' };
   const itemHtml = (s, srcTag) => {
     const mid   = Math.round((s.start + s.end) / 2);
     const fl    = computeSimFlIdx(mid) * 10;
@@ -2776,7 +2778,7 @@ function renderTurbTimeline() {
     const t1    = clock(s.start), t2 = clock(s.end);
     const clockStr = t1 ? `<span style="color:#888;font-size:0.62rem"> · ${t1}~${t2} KST</span>` : '';
     return `<div style="margin:5px 0;padding:6px 8px;background:#fff;border:1px solid #e8ecf0;border-left:3px solid ${bd};border-radius:4px">
-      <div><b style="color:${tx};font-size:0.72rem">${SEV_KO[s.severity] || s.severity}</b>${srcTag}
+      <div><b style="color:${tx};font-size:0.72rem">${TL_SEV[s.severity] || s.severity}</b>${srcTag}
         <span style="color:#888;font-size:0.62rem">&nbsp;${phase} · FL${String(fl).padStart(3, '0')}</span></div>
       <div style="color:#333;font-size:0.72rem;margin-top:2px">이륙 후 ${hm(s.start)} ~ ${hm(s.end)}
         <span style="color:#888;font-size:0.62rem">(${s.durMin}분 통과)</span>${clockStr}</div>
@@ -2810,7 +2812,7 @@ function renderTurbTimeline() {
     const badge = `<span style="background:#eef3fb;color:#3a66c4;font-size:0.58rem;padding:1px 5px;border-radius:3px;margin-left:5px;font-weight:600">G-KTG 예보</span>`;
     if (gspans.length) {
       const typeKo = GKTG.currentType === 'CAT' ? '청천난류' : GKTG.currentType === 'MTW' ? '산악파' : '최대난류';
-      gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(공식 3등급 약·보통·심함 · SIGMET 아님)</span></div>`
+      gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(공식 3등급 Light·Moderate·Severe · SIGMET 아님)</span></div>`
                + gspans.map(s => itemHtml(s, badge)).join('');
     }
   }
@@ -2818,7 +2820,7 @@ function renderTurbTimeline() {
   if (!sigHtml && !gktgHtml) {
     const parts = [];
     if (sigOn)  parts.push('SIGMET');
-    if (gktgOn) parts.push('G-KTG 예보(약·보통·심함)');
+    if (gktgOn) parts.push('G-KTG 예보(Light·Moderate·Severe)');
     statEl.textContent = `현재 항로·고도 프로파일과 교차하는 ${parts.join(' · ')} 난기류 없음`;
     listEl.innerHTML = '';
     return;
