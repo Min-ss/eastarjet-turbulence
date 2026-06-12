@@ -384,26 +384,32 @@
     .sim-btn-secondary:hover { background:rgba(0,0,0,0.08); }
     #sim-time-display { font-size:0.92rem; color:#E60020; font-weight:600; text-align:center; margin:8px 0 4px; letter-spacing:-0.02em; }
 
-    /* ── 모바일 시뮬 배지 (지도 위 floating) ── */
-    #sim-map-badge {
+    /* ── 시뮬 상태 통합 바: 시계·고도 + TURB 예고를 한 줄 알약으로 (지도 가림 최소화) ── */
+    #sim-topbar {
       display:none;
       position:absolute; top:10px; left:50%;
       transform:translateX(-50%);
-      background:rgba(230,0,32,0.92); color:#fff;
-      border-radius:20px; padding:5px 14px;
-      font-size:0.72rem; font-weight:700;
+      align-items:center; gap:9px;
+      background:rgba(26,32,53,0.93); color:#fff;
+      border-radius:20px; padding:7px 14px;
+      font-size:0.78rem; font-weight:700;
       white-space:nowrap; z-index:950;
       pointer-events:none;
-      box-shadow:0 2px 12px rgba(0,0,0,0.28);
+      box-shadow:0 2px 10px rgba(0,0,0,0.35);
+    }
+    #sim-map-badge, #next-turb-chip { display:none; white-space:nowrap; }
+    #sim-topbar-div { display:none; color:rgba(255,255,255,0.3); font-weight:400; }
+    @media (max-width:768px) {
+      #sim-topbar { font-size:0.68rem; padding:6px 11px; gap:7px; max-width:94vw; }
+      #next-turb-chip { overflow:hidden; text-overflow:ellipsis; }
     }
 
-    /* ── 시뮬 활성화 시 지도 위 floating 재생 버튼 ── */
+    /* ── 재생/일시정지 버튼 (통합 바와 분리 · 지도 우상단 고정) ── */
     #sim-map-play-btn {
       display:none;
-      position:absolute; top:46px; left:50%;
-      transform:translateX(-50%);
+      position:absolute; top:10px; right:12px;
       background:#E60020; color:#fff; border:none;
-      border-radius:980px; padding:8px 18px;
+      border-radius:980px; padding:8px 16px;
       font-size:0.82rem; font-weight:600;
       cursor:pointer; font-family:inherit;
       letter-spacing:-0.01em;
@@ -411,8 +417,10 @@
       box-shadow:0 4px 14px rgba(230,0,32,0.32);
       transition:background 0.2s, transform 0.15s cubic-bezier(0.16,1,0.3,1);
     }
-    #sim-map-play-btn:hover  { background:#B8001A; transform:translateX(-50%) scale(1.04); }
-    #sim-map-play-btn:active { transform:translateX(-50%) scale(0.97); }
+    #sim-map-play-btn:hover  { background:#B8001A; transform:scale(1.04); }
+    #sim-map-play-btn:active { transform:scale(0.97); }
+    /* 모바일: 통합 바가 화면 폭 대부분을 차지 → 버튼은 바 아래 우측으로 (겹침 방지) */
+    @media (max-width:768px) { #sim-map-play-btn { top:50px; padding:9px 14px; font-size:0.78rem; } }
 
     /* ── 모바일 반응형 ── */
     @media (max-width:768px) {
@@ -475,9 +483,6 @@
       #sidebar-toggle { font-size:1.3rem; padding:8px 12px; }
       #refresh-btn { min-height:38px; }
       .panel-header { min-height:44px; }
-
-      /* 시뮬 배지 활성화 */
-      #sim-map-badge { display:none; } /* JS로 제어 */
     }
 
     /* ── 모바일 사이드바 스크림 (바깥 탭하여 닫기) ── */
@@ -544,14 +549,6 @@
       #sidebar input[type="range"] { height:34px; }
       #sidebar input[type="range"]::-webkit-slider-thumb { width:24px; height:24px; }
     }
-    /* ── ① 다음 난기류 진입 상시 배지 (지도 위 고정 · 시뮬 시계 칩/재생 버튼 아래) ── */
-    #next-turb-chip { position:absolute; top:84px; left:50%; transform:translateX(-50%); z-index:850;
-      background:rgba(26,32,53,0.93); color:#fff; padding:7px 14px; border-radius:20px;
-      font-size:0.78rem; font-weight:700; box-shadow:0 2px 10px rgba(0,0,0,0.35);
-      pointer-events:none; white-space:nowrap; display:none; }
-    @media (max-width:768px) { #next-turb-chip { top:76px; font-size:0.7rem; padding:6px 11px;
-      max-width:90vw; overflow:hidden; text-overflow:ellipsis; } }
-
     /* ── 면책 공지 바 (Apple subtle footer) ── */
     #disclaimer-bar {
       position:fixed; bottom:0; left:0; right:0; z-index:1199;
@@ -836,9 +833,13 @@
   <!-- 모바일 사이드바 스크림: 바깥 영역 탭하면 사이드바 닫힘 -->
   <div id="sidebar-scrim" onclick="toggleSidebar()"></div>
 
-  <!-- 모바일: 시뮬 활성화 시 지도 위 floating 배지 -->
-  <div id="sim-map-badge"></div>
-  <!-- 시뮬 활성화 시 지도 위 floating 재생/일시정지 버튼 (사이드바 닫고도 조작 가능) -->
+  <!-- 시뮬 상태 통합 바: [✈ 시각·고도·단계 │ ● TURB 예고] 한 줄 (세그먼트 표시는 JS 제어) -->
+  <div id="sim-topbar">
+    <span id="sim-map-badge"></span>
+    <span id="sim-topbar-div">│</span>
+    <span id="next-turb-chip"></span>
+  </div>
+  <!-- 재생/일시정지 버튼 (통합 바와 분리 · 우상단 · 사이드바 닫고도 조작 가능) -->
   <button id="sim-map-play-btn" type="button" onclick="toggleSimPlay()">▶ 재생</button>
   <div id="map"></div>
 </div>
@@ -2796,12 +2797,25 @@ function renderTurbulence(records, offsetHours) {
 let _tlShowLight = false;
 function toggleTlLight() { _tlShowLight = !_tlShowLight; renderTurbTimeline(); }
 
+// ── 시뮬 상태 통합 바 동기화 — 세그먼트가 하나라도 보이면 바 표시, 둘 다 보이면 구분선 ──
+function syncSimTopbar() {
+  const bar = document.getElementById('sim-topbar');
+  if (!bar) return;
+  const badge = document.getElementById('sim-map-badge');
+  const chip  = document.getElementById('next-turb-chip');
+  const bOn = !!(badge && badge.style.display !== 'none' && badge.innerHTML);
+  const cOn = !!(chip  && chip.style.display  !== 'none' && chip.innerHTML);
+  bar.style.display = (bOn || cOn) ? 'flex' : 'none';
+  const div = document.getElementById('sim-topbar-div');
+  if (div) div.style.display = (bOn && cOn) ? 'inline' : 'none';
+}
+
 // ── ① 다음 난기류 진입 상시 배지 — 시뮬 현재 시각 기준 보통 이상 구간 안내 ──
 function updateNextTurbChip(simMin) {
   const el = document.getElementById('next-turb-chip');
   if (!el) return;
   const m = (typeof simMin === 'number') ? simMin : (SIM.currentMin || 0);
-  if (!STATE.currentRoute || !SIM.totalMin) { el.style.display = 'none'; return; }
+  if (!STATE.currentRoute || !SIM.totalMin) { el.style.display = 'none'; syncSimTopbar(); return; }
   const all = [...(STATE.gktgBeltAlerts || []), ...(STATE.beltAlerts || [])];
   const spans = all.filter(s => (GKTG_SEV_RANK[s.severity] || 0) >= 2).sort((a, b) => a.start - b.start);
   const col = sv => sv === 'extreme' ? '#FF5544' : sv === 'severe' ? '#FF9D45' : '#FFD700';
@@ -2813,8 +2827,9 @@ function updateNextTurbChip(simMin) {
     el.innerHTML = `<span style="color:${col(next.severity)}">●</span> ${TL_SEV[next.severity]} +${next.start - m}분 후 · ${next.durMin}분간`;
   } else if (all.length) {
     el.innerHTML = `<span style="color:#6fcf6f">●</span> 잔여 구간 보통 이상 난기류 없음`;
-  } else { el.style.display = 'none'; return; }
-  el.style.display = 'block';
+  } else { el.style.display = 'none'; syncSimTopbar(); return; }
+  el.style.display = 'inline-block';
+  syncSimTopbar();
 }
 
 function renderTurbTimeline() {
@@ -4272,7 +4287,7 @@ function syncTurbWithSim(minutes) {
     `<span style="color:#E60020;font-weight:600">🔗 비행 경과 +${snap30}분</span>` +
     sigLine + gktgLine;
 
-  // ── 모바일: 지도 위 배지 갱신 ────────────────────────────────
+  // ── 통합 바: 시계·고도·단계 세그먼트 갱신 ───────────────────
   const badge = document.getElementById('sim-map-badge');
   if (badge) {
     const dispFlIdx = computeSimFlIdx(minutes);
@@ -4280,7 +4295,8 @@ function syncTurbWithSim(minutes) {
     badge.innerHTML =
       `✈ ${hh}:${mm}&nbsp;&nbsp;<span style="font-family:monospace;font-size:0.8rem">${flIdxToLabel(dispFlIdx)}</span>` +
       `<span style="font-weight:400;opacity:0.85;font-size:0.65rem"> ${phase}</span>`;
-    badge.style.display = 'block';
+    badge.style.display = 'inline-block';
+    syncSimTopbar();
   }
 }
 
@@ -4331,7 +4347,7 @@ function restoreTurbFromSim() {
   const altEl = document.getElementById('sim-alt-display');
   if (altEl) altEl.textContent = '';
   const badge = document.getElementById('sim-map-badge');
-  if (badge) badge.style.display = 'none';
+  if (badge) { badge.style.display = 'none'; syncSimTopbar(); }
 
   // SIGMET: 헤더 슬라이더 오프셋으로 복원
   if (STATE.turbEnabled && STATE.turbRecords.length > 0) {
@@ -5472,13 +5488,6 @@ onGktgToggle(true);
 // SIGMET 난류 토글 기본 활성화 (승무원 즉시 확인용)
 document.getElementById('turb-toggle').checked = true;
 onTurbToggle(true);
-
-// ① 다음 난기류 진입 상시 배지 엘리먼트 (지도 위 고정)
-(function () {
-  const chip = document.createElement('div');
-  chip.id = 'next-turb-chip';
-  document.getElementById('map').appendChild(chip);
-})();
 
 // ③④ URL(?flt=645&date=YYYY-MM-DD) 또는 마지막 조회 자동 복원 — 열자마자 0탭 브리핑
 (function restoreLookup() {
