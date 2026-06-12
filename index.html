@@ -2655,7 +2655,8 @@ function renderTurbulence(records, offsetHours) {
     const flNote = !flOk
       ? `<span style="color:#888;font-size:0.62rem"> (순항고도 FL${getCurrentCruiseFl()} 무관)</span>`
       : '';
-    const edrApprox = {moderate:'EDR~0.15-0.22', severe:'EDR~0.22-0.34', extreme:'EDR>0.34'}[rec.severity]||'';
+    // ICAO Annex 3 EDR 구간 (SIGMET/PIREP 용 — G-KTG 의 0.15/0.22/0.34 와 다른 척도)
+    const edrApprox = {moderate:'EDR~0.20-0.45 (ICAO)', severe:'EDR≥0.45 (ICAO)', extreme:'EDR≥0.45 · EXTRM 실보고'}[rec.severity]||'';
     const rawSnip = rec.rawText
       ? `<div style="margin-top:5px;padding-top:4px;border-top:1px solid #333;
            font-size:0.6rem;color:#888;font-family:monospace;
@@ -2809,7 +2810,7 @@ function renderTurbTimeline() {
     const badge = `<span style="background:#eef3fb;color:#3a66c4;font-size:0.58rem;padding:1px 5px;border-radius:3px;margin-left:5px;font-weight:600">G-KTG 예보</span>`;
     if (gspans.length) {
       const typeKo = GKTG.currentType === 'CAT' ? '청천난류' : GKTG.currentType === 'MTW' ? '산악파' : '최대난류';
-      gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(참고용 · SIGMET 아님)</span></div>`
+      gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(공식 3등급 약·보통·심함 · SIGMET 아님)</span></div>`
                + gspans.map(s => itemHtml(s, badge)).join('');
     }
   }
@@ -2838,23 +2839,27 @@ function renderTurbTimeline() {
 // ══════════════════════════════════════════════════════════════
 const GKTG_SEV_RANK = { light: 1, moderate: 2, severe: 3, extreme: 4 };
 
-// 실측 AMO G-KTG 팔레트: 녹(0,224,0)→황(224,192,0)→주(224,128,0)→적(224,0,0), b≈0
+// 공식 AMO G-KTG 범례(global.amo.go.kr/aami/img/legend/gktg3.png)는 3등급:
+//   녹 = LGT(약, EDR 0.15~) · 황 = MOD(보통, 0.22~) · 적 = SEV(심함, 0.34~). '극심' 등급 없음.
+// 실측 순색 앵커(전 FL·fh 전수 히스토그램): 녹(0,255,0) · 황(255,204,0) · 적(255,0,0).
+//   그 사이 색(주황 포함)은 전부 셀 경계 안티앨리어싱 블렌드 — 순주황 플래토는 존재하지 않음.
+//   블렌드는 최근접 앵커로 귀속하되 경계를 높은 등급 쪽으로 치우침(안전 보수적):
+//   황↔적 중점은 g=102 이지만 g<128(적 37.5% 이상)이면 심함으로 분류.
 function _classifyGktgPixel(r, g, b, a) {
   if (a < 50) return null;                         // 투명 = 예보 없음
   if (b > 130 && b >= r && b >= g) return null;    // 파랑 계열 = 배경(라벨/해양)
   const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
   if (mx < 70 || mx - mn < 55) return null;        // 어둡거나 저채도 = 배경/경계선
-  if (r < 150 && g >= 150) return 'light';         // 녹색
-  if (g >= 160) return 'moderate';                 // 황색
-  if (g >= 80)  return 'severe';                   // 주황
-  return 'extreme';                                // 적색
+  if (r < 128 && g >= 150) return 'light';         // 녹색 (녹↔황 블렌드 중점 r=128, 이상은 보통)
+  if (g >= 128) return 'moderate';                 // 황색 (공식 MOD)
+  return 'severe';                                  // 적색 (공식 SEV) — G-KTG 최고 등급
 }
 
 // ImageBitmap 항로 코리도(corridor) 샘플 — 전체 ImageData(≈23MB) 미할당, 소블록 스크래치만.
 //   합성모드 'copy' → 투명 픽셀도 그대로 복사(이전 잔상 방지).
 //   단일픽셀이 아니라 항로 ±_GKTG_CORRIDOR_DEG° 작은 코리도를 읽어 '최대 심각도'를 취함.
-//   이유: G-KTG(GDPS) 격자가 거칠고, 샘플용 축소본(weserv) PNG 경계에 안티앨리어싱
-//        반투명(α≈1~10) 픽셀이 섞여, 단일픽셀이 실제 난기류 셀의 빈틈/경계에 빠지면
+//   이유: G-KTG(GDPS) 격자가 거칠고, 원본 PNG 자체의 셀 경계에도 안티앨리어싱
+//        반투명(α 저값) 픽셀이 있어, 단일픽셀이 실제 난기류 셀의 빈틈/경계에 빠지면
 //        화면엔 색이 보여도 '없음'으로 오판 → 타임라인이 심한 난기류까지 누락하던 버그.
 //   코리도는 해상도 독립(°→px 동적). 0.3°(≈±33km)는 항로 폭/항법오차 수준이라
 //   항로에서 뚜렷이 벗어난(예: +0.7° 내륙) 셀은 여전히 제외 → 과탐 없이 누락만 보정.
@@ -2888,13 +2893,16 @@ function _sampleBitmapPixel(bmp, lat, lng) {
   return bestSev;
 }
 
-// 비트맵 LRU 캐시 (url → ImageBitmap) — 재샘플(출발시각·토글) 즉시화
-const _gktgBmpCache = new Map();
-const _GKTG_BMP_MAX  = 12;
+// blob LRU 캐시 (url → Blob) — 재샘플(출발시각·토글) 시 재전송 없이 즉시 디코드.
+//   원본 해상도 비트맵(3599px ≈ 23MB RGBA)을 상주시키지 않고 압축 blob(수백 KB)만 보관.
+//   디코드는 그룹 샘플 직전에만 하고 사용 후 close → 메모리 즉시 회수(모바일 안전).
+const _gktgBlobCache = new Map();
+const _GKTG_BLOB_MAX = 12;
 // 샘플링 전용 이미지 수신 (빠른 실패가 핵심 — 404 후보 탐색 비용 최소화):
 //   1) 직접 CORS — 프로덕션(https·AMO ACAO)에서 즉시 성공, file:// 는 즉시 실패(저비용)
-//   2) weserv 축소본 — file:// 등 직접 차단 환경. 원본 23MB 대신 ~1/4 해상도(전송·디코딩 단축).
-//   G-KTG 격자(GDPS)는 원래 성기므로 축소본으로도 항로 샘플링 정확도 충분.
+//   2) weserv 원본 패스스루(output=png, 리사이즈 없음) — file:// 등 직접 차단 환경.
+//   원본 해상도 사용 이유(정확도): 축소본(w=1800)은 다운스케일 블렌딩으로 1분급 미세 셀을
+//   놓치고 구간 경계가 1~3분 어긋남을 실측 확인 → 원본은 리샘플링 자체가 없어 픽셀 정확.
 //   존재하지 않는 조합(404)은 풀체인 재시도 없이 즉시 throw → 다음 후보로 빠르게 이동.
 async function _fetchGktgSampleBlob(url) {
   try {
@@ -2902,25 +2910,23 @@ async function _fetchGktgSampleBlob(url) {
     if (r.ok) { const b = await r.blob(); if (b && b.size > 300 && (b.type || '').startsWith('image/')) return b; }
   } catch (_) { /* file://: 즉시 실패 → weserv */ }
   const enc = encodeURIComponent(url.replace(/^https?:\/\//, ''));
-  const r2  = await fetch(`https://images.weserv.nl/?url=${enc}&w=1800&output=png`,
-                          { signal: AbortSignal.timeout(8000) });
+  const r2  = await fetch(`https://images.weserv.nl/?url=${enc}&output=png`,
+                          { signal: AbortSignal.timeout(12000) });
   if (!r2.ok) throw new Error('weserv ' + r2.status);
   const b2 = await r2.blob();
   if (!(b2 && b2.size > 300 && (b2.type || '').startsWith('image/'))) throw new Error('weserv bad blob');
   return b2;
 }
 async function _getGktgBitmap(url) {
-  if (_gktgBmpCache.has(url)) {                            // LRU touch
-    const v = _gktgBmpCache.get(url); _gktgBmpCache.delete(url); _gktgBmpCache.set(url, v); return v;
+  let blob;
+  if (_gktgBlobCache.has(url)) {                           // LRU touch
+    blob = _gktgBlobCache.get(url); _gktgBlobCache.delete(url); _gktgBlobCache.set(url, blob);
+  } else {
+    blob = await _fetchGktgSampleBlob(url);
+    while (_gktgBlobCache.size >= _GKTG_BLOB_MAX) _gktgBlobCache.delete(_gktgBlobCache.keys().next().value);
+    _gktgBlobCache.set(url, blob);
   }
-  const blob = await _fetchGktgSampleBlob(url);
-  const bmp  = await createImageBitmap(blob);
-  while (_gktgBmpCache.size >= _GKTG_BMP_MAX) {
-    const k = _gktgBmpCache.keys().next().value, old = _gktgBmpCache.get(k);
-    _gktgBmpCache.delete(k); if (old && old.close) old.close();
-  }
-  _gktgBmpCache.set(url, bmp);
-  return bmp;
+  return await createImageBitmap(blob);                    // 호출자가 close() 책임
 }
 
 // 고정 예보시간(fh)으로 최신 발표런부터 시도해 비트맵 획득.
@@ -2998,9 +3004,10 @@ async function sampleGktgRouteBelts() {
   // 2-a) 최대 그룹(순항 주 예보시간) 먼저 — 순항 결과 즉시 표시(점진 렌더)
   if (meta.length) {
     const r0 = await _fetchGktgBitmapForFh(meta[0].flIdx, meta[0].fh, type);
-    if (myToken !== _gktgSampleToken) return;
+    if (myToken !== _gktgSampleToken) { if (r0) r0.bmp.close?.(); return; }
     if (r0) {
       apply(meta[0].idxs, r0.bmp);
+      r0.bmp.close?.();                                            // 원본급 23MB — 즉시 회수
       STATE.gktgBeltAlerts = buildSpans(); renderTurbTimeline();   // 순항 구간 우선 표시
     }
   }
@@ -3010,7 +3017,9 @@ async function sampleGktgRouteBelts() {
     if (myToken !== _gktgSampleToken) return;
     await Promise.all(rest.slice(i, i + CONC).map(async g => {
       const r = await _fetchGktgBitmapForFh(g.flIdx, g.fh, type);
-      if (r && myToken === _gktgSampleToken) apply(g.idxs, r.bmp);
+      if (!r) return;
+      if (myToken === _gktgSampleToken) apply(g.idxs, r.bmp);
+      r.bmp.close?.();                                             // 사용 후 즉시 회수
     }));
   }
   if (myToken !== _gktgSampleToken) return;
