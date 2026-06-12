@@ -2792,6 +2792,10 @@ function renderTurbulence(records, offsetHours) {
 // ── 난기류 진입 타임라인 (사이드바) ─────────────────────────────
 //   STATE.beltAlerts (실고도 ∩ SIGMET FL밴드 분단위 교차 구간) 를 비행시간순으로 표시.
 //   순항고도와 무관한 난기류는 애초에 beltAlerts 에 없음 → 자동 제외. 대응텍스트 미포함.
+// 타임라인 Light 구간 표시 토글 (재렌더 간 상태 유지)
+let _tlShowLight = false;
+function toggleTlLight() { _tlShowLight = !_tlShowLight; renderTurbTimeline(); }
+
 // ── ① 다음 난기류 진입 상시 배지 — 시뮬 현재 시각 기준 보통 이상 구간 안내 ──
 function updateNextTurbChip(simMin) {
   const el = document.getElementById('next-turb-chip');
@@ -2882,12 +2886,14 @@ function renderTurbTimeline() {
       if (modSp.length) sp.push(`<b style="color:#B8860B">Moderate ${modSp.length}구간·${sum(modSp)}분</b>`);
       if (lgtSp.length) sp.push(`<span style="color:#558B2F">Light ${lgtSp.length}구간·${sum(lgtSp)}분</span>`);
       const summary = `<div style="margin:3px 0 4px;padding:5px 8px;background:#f6f8fa;border:1px solid #e8ecf0;border-radius:4px;font-size:0.66rem;line-height:1.6">${sp.join(' · ')}</div>`;
-      const mainCards = gspans.filter(s => s.severity !== 'light').map(s => itemHtml(s, badge)).join('');
-      const lightBlock = lgtSp.length
-        ? `<details style="margin:4px 0"><summary style="cursor:pointer;font-size:0.66rem;color:#558B2F;font-weight:600;padding:4px 2px">🟢 Light TURB ${lgtSp.length}구간 펼쳐보기 (총 ${sum(lgtSp)}분)</summary>${lgtSp.map(s => itemHtml(s, badge)).join('')}</details>`
+      // Light 토글: 켜면 전체(약 포함)를 시간순 통합 표시, 끄면 보통/심함만 — 별도 블록 분리 없음
+      const cards = (_tlShowLight ? gspans : gspans.filter(s => s.severity !== 'light'))
+        .map(s => itemHtml(s, badge)).join('');
+      const lightToggle = lgtSp.length
+        ? `<button onclick="toggleTlLight()" style="width:100%;margin:2px 0 3px;padding:5px 8px;background:${_tlShowLight ? '#eaf5ea' : '#fff'};border:1px solid #cfe3cf;border-radius:4px;font-size:0.66rem;color:#3a7a3a;font-weight:600;cursor:pointer;text-align:left;font-family:inherit">${_tlShowLight ? `🟢 Light TURB 포함 시간순 표시 중 — 숨기기` : `🟢 Light TURB ${lgtSp.length}구간 시간순으로 함께 보기 (총 ${sum(lgtSp)}분)`}</button>`
         : '';
       gktgHtml = `<div style="font-size:0.6rem;color:#86868b;font-weight:700;margin:8px 0 1px">G-KTG 모델 예보 · ${typeKo} <span style="color:#aab;font-weight:400">(공식 3등급 Light·Moderate·Severe · SIGMET 아님)</span></div>`
-               + summary + mainCards + lightBlock;
+               + summary + lightToggle + cards;
     }
   }
 
