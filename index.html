@@ -2977,12 +2977,14 @@ async function sampleGktgRouteBelts() {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(m);
   }
-  // 큰 그룹(순항) 우선, 1분짜리 미세 조각만 제외, 이미지 최대 10장.
+  // 큰 그룹(순항) 우선 정렬, 전수 샘플 — 1분 그룹(상승·하강 FL 전환분)도 포함.
+  //   기존 "1분 그룹 스킵 + 10장 캡"은 장거리(그룹 12~13개) 하강 구간을 누락시킴
+  //   (58개 노선 전수 측정에서 8개 노선 1~5분 누락 실측). 그룹 수는 FL단계×fh 로
+  //   유계(실측 최대 13) · 블롭 LRU 캐시 재사용. 안전 상한 24장.
   const meta = [...groups.values()]
     .map(idxs => ({ idxs, flIdx: mins[idxs[0]].flIdx, fh: mins[idxs[0]].fh, size: idxs.length }))
     .sort((a, b) => b.size - a.size)
-    .filter((g, i) => i === 0 || g.size >= 2)
-    .slice(0, 10);
+    .slice(0, 24);
 
   const sevByMin = new Array(total + 1).fill(null);
   const apply = (idxs, bmp) => { for (const m of idxs) sevByMin[m] = _sampleBitmapPixel(bmp, mins[m].lat, mins[m].lng); };
