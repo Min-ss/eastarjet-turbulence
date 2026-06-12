@@ -4280,7 +4280,11 @@ async function _fetchImageBlobViaChain(url, timeoutMs = 12000) {
   // 2026-04 측정: AMO 는 Access-Control-Allow-Origin 을 실제로 보낸다 → direct-cors 성공
   // 사내망에서 direct 가 방화벽에 막힐 경우 대비해 images.weserv.nl (다른 CDN) 을 2순위
   // 기존 공개 CORS proxy 들은 대부분 죽거나 rate-limit 이라 마지막 폴백.
-  const weserv = `https://images.weserv.nl/?url=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}`;
+  // ⚠ &output=png 필수: 이게 없으면 일부 환경(특히 file:// = origin 'null')에서 weserv
+  //   응답이 image/* 가 아니어서 폴백이 전부 실패→재투영 불가→오버레이가 equirect 를
+  //   Mercator 로 잘못 stretch(고위도일수록 북쪽 시프트)한 '왜곡본'으로 남는다. 샘플 경로
+  //   (_fetchGktgSampleBlob)는 이미 output=png 를 써서 null origin 에서도 성공 → 동일하게 맞춤.
+  const weserv = `https://images.weserv.nl/?url=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}&output=png`;
   const tries = [
     () => fetch(url,    { mode: 'cors', cache: 'force-cache', signal: AbortSignal.timeout(timeoutMs) }),
     () => fetch(weserv, { signal: AbortSignal.timeout(timeoutMs) }),
